@@ -1,0 +1,182 @@
+require 'adm_connection'
+require 'rubygems'
+require 'sqlite3'
+require 'yaml'
+
+  #
+  # The Sender class represent the send layer. Reference a set of strategys wich
+  # will perform the same function but in a diferent way, that is, gather all the
+  # information required and comunicate with the Admconnection layer. This class
+  # it's called the context class, an acts as the user of the strategys.
+  #
+  class Sender
+
+    # Reference an instance for the Connection Administrator
+    attr_reader :adm
+    # Specify the destination number(s) to deliver the sms
+    attr_reader :dst
+    # Specify the messaje that will be deliver to destiny
+    attr_reader :msj
+    # Specify whether a delivered report will be generated or not (1: yes, 0: no)
+    attr_reader :report
+    # Specify a particular number for the smsc. If not specifyed default number will be used
+    attr_reader :smsc
+    # Specify the time of validity in minutos of the delivered sms
+    attr_reader :validity
+    # Specify the location of the file used to read send configuration
+    attr_reader :location
+    # Reference the type of send that will be used to set the parameters and deliver the message
+    attr_accessor :sendtype
+
+
+    #
+    # Set methods for the options of a message. Including validations.
+    #
+    def report=(report)
+      report = report.to_i unless report.class == Fixnum
+      unless report == 0 or report == 1
+        raise ArgumentError.new('Report only could be 0 or 1')
+      end
+      @report = report
+    end
+
+    def smsc=(smsc)
+
+      @smsc = smsc
+    end
+
+    def validity=(validity)
+      validity = validity.to_s unless validity.class == String
+      @validity = validity
+    end
+
+    def dst=(dst)
+      unless dst.class == Array
+        raise 'The destinatary must be an Array'
+      end
+      @dst = dst
+    end
+
+    #
+    # Obtains an instance of the Connection Administrator to control all existing
+    # connections. Due to the use of a singleton in the administrator, the same
+    # created instance will be obtain, or will be created if an instance doesn't
+    # exist. It also establish the strategy to be use acording to the specified by
+    # the user. An Exception is thrown if the instance of Admconnection fail
+    #
+    def initialize(sendtype,location= 'config_sms.yml')
+      begin
+        @adm = AdmConnection.instance
+        @location=location
+        @sendtype=sendtype
+        @report = 0
+        @smsc = nil
+        @validity = '0'
+        @dst =[]
+      end
+    end
+
+    #
+    # Establish the option values to be use for sending the SMS message
+    #
+    def setconfig(dst,smsc,report,validity)
+      @dst=dst
+      @smsc=smsc
+      @report=report
+      @validity=validity
+    end
+
+    #
+    # Combine all option values into a hash to relate them
+    #
+    def to_hash
+      { :type => 'send',
+        :dst => self.dst,
+        :msj => self.msj,
+        :smsc => self.smsc,
+        :report => self.report,
+        :validity => self.validity}
+    end
+
+    #
+    # Represent the send method for the Send class. The message to be send is passed
+    # as the only parameter and depending on the choosen strategy the other option
+    # values will be obtain diferently. The instance of the context class will be
+    # passed to the strategy, and the send function will be executed only if an
+    # instance of the Connection Administrator exist.
+    #
+    def send(msj)
+      begin
+        @msj = msj
+        !@adm.avlconn ? (raise "There are no active connections") : t=Thread.new{@sendtype.send(self){|e| yield e if block_given?}}
+        t[:type]='sp'
+      rescue Exception => e
+        @adm.log.error "Error sending message :: #{e.message}" unless @adm.log.nil?
+        raise e.message
+      end
+    end
+    
+  end
+
+  #
+  # The Plainsend class represent one of the strategys and will use the recieve
+  # instance of the context class to invoke the send function of the Connection
+  # Administrator and also for getting all option values previosly set in the
+  # context class
+  #
+  class Plainsend
+    
+    def send(context)
+      context.adm.send(context.to_hash){|e| yield e if block_given?}
+    end
+
+  end
+
+  #
+  # The Configsend class represent a strategy wich will use the received context
+  # class to invoke the send function of the Connection Administrator. With this
+  # strategy the option values will be obtain from a configuration file previosly
+  # created by user.
+  #
+  class Configsend
+     def send(context)
+      begin
+        parse = YAML::parse(File.open(context.location))
+        config = parse.transform
+        dst = config['parameters']['dst'].split(',')
+        context.dst=dst
+        context.validity=(config['parameters']['validity']).to_s if !(config['parameters']['validity']=~/[0-9]*/)
+        context.report=config['parameters']['report'] if !(config['parameters']['report']== 0 or config['parameters']['report'] == 1)
+        context.smsc=config['parameters']['smsc'] if !(config['parameters']['smsc']=~/[0-9]*/)
+        context.adm.send(context.to_hash){|e| yield e if block_given?}
+      rescue Exception=> e
+       context.adm.log.error "Configsend Exception: #{e.message}"
+       raise e.message
+      end
+    end
+  end
+
+  #
+  # The BDsend class represent a strategy wich will use the context class to invoke
+  # the send function of the Connection Administrator. With this strategy the 
+  # destination option value will be taken from a database specified in the configuration
+  # file, and the other option values will be taken from the context class
+  # 
+  class BDsend
+    
+    def send(context)
+      begin
+        parse = YAML::parse(File.open(context.location))
+        config = parse.transform
+        db = SQLite3::Database.new(config['database']['db']+'.s3db')
+        sql = "Select " + config['database']['field'] + " from " + config['database']['table']
+        a = db.execute(sql) 
+        context.dst=a
+        context.adm.send(context.to_hash){|e| yield e if block_given?}
+      rescue Exception=> e
+       context.adm.log.error "BDsend Exception: #{e.message}"
+       raise e.message
+      end
+    end
+    
+  end
