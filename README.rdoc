@@ -1,0 +1,20 @@
+= smsRuby/Ruby Interface
+
+An SMS middleware using a Ruby wrapper for sending and receving SMS through cellphones connected to the computer.
+
+
+== Installation
+
+After you download the gem from RubyForge you can install using RubyGems commands, e.g
+
+ gem install smsRuby
+
+Also, the gem ships with the C source-code pre-built, so (as of version 1.1.1)
+you don't need to have SWIG installed. However, if you have SWIG installed
+and you want to generate the C file yourself, you can specify the
+<code>--with-swig</code> option.
+
+== Usage
+
+Use the FAQ .
+
